@@ -1,0 +1,30 @@
+# led_control.py
+
+import lgpio
+
+class LEDControl:
+    RED_PIN = 17
+    GREEN_PIN = 23
+    BLUE_PIN = 22
+
+    def __init__(self):
+        self.h = lgpio.gpiochip_open(0)
+        lgpio.gpio_claim_output(self.h, self.RED_PIN)
+        lgpio.gpio_claim_output(self.h, self.GREEN_PIN)
+        lgpio.gpio_claim_output(self.h, self.BLUE_PIN)
+
+    def turn_on(self):
+        lgpio.gpio_write(self.h, self.RED_PIN, 1)
+        lgpio.gpio_write(self.h, self.GREEN_PIN, 1)
+        lgpio.gpio_write(self.h, self.BLUE_PIN, 1)
+        print("LEDs turned ON.")
+
+    def turn_off(self):
+        lgpio.gpio_write(self.h, self.RED_PIN, 0)
+        lgpio.gpio_write(self.h, self.GREEN_PIN, 0)
+        lgpio.gpio_write(self.h, self.BLUE_PIN, 0)
+        print("LEDs turned OFF.")
+
+    def cleanup(self):
+        self.turn_off()
+        lgpio.gpiochip_close(self.h)

@@ -1,0 +1,369 @@
+from django.shortcuts import render
+import boto3
+import matplotlib
+matplotlib.use('Agg')  # Use non-GUI backend
+import matplotlib.pyplot as plt
+from io import BytesIO
+import base64
+from datetime import datetime
+import numpy as np
+import json
+import pandas as pd  # Import pandas
+
+# Initialize DynamoDB resource
+dynamodb = boto3.resource('dynamodb', region_name='ap-southeast-1')
+
+def calculate_class_percentages(items, class_type):
+    """
+    Calculate average probabilities for 3 or 4 class predictions.
+    """
+    # Adjust class order: Normal, Constipation, Diarrhea
+    class_probabilities = {
+        'Normal': [],
+        'Constipation': [],
+        'Diarrhea': []
+    }
+
+    for item in items:
+        key = f'Probabilities_{class_type}'
+        if key in item:
+            probs = item[key]
+            for class_name in class_probabilities.keys():
+                class_probabilities[class_name].append(float(probs.get(class_name, 0)))
+
+    # Calculate average percentages and round to the nearest integer
+    percentages = {
+        class_name: int(round(float(np.mean(values)) * 100)) if values else 0
+        for class_name, values in class_probabilities.items()
+    }
+
+    return percentages
+
+def calculate_seven_class_percentages(items):
+    """
+    Calculate average probabilities for 7 class predictions.
+    """
+    class_probabilities = {
+        'BS1': [],
+        'BS2': [],
+        'BS3': [],
+        'BS4': [],
+        'BS5': [],
+        'BS6': [],
+        'BS7': []
+    }
+
+    for item in items:
+        if 'Probabilities_7' in item:
+            probs = item['Probabilities_7']
+            for key in class_probabilities.keys():
+                class_probabilities[key].append(float(probs.get(key, 0)))
+
+    # Calculate average percentages and round to the nearest integer
+    percentages = {
+        key: int(round(float(np.mean(values)) * 100)) if values else 0
+        for key, values in class_probabilities.items()
+    }
+
+    return percentages
+
+def calculate_times(items):
+    """
+    Calculate total event time and defecation time based on image timestamps.
+    """
+    timestamps = [
+        datetime.strptime(item.get('image_name', '').rsplit('.', 1)[0], "%Y%m%d%H%M%S")
+        for item in items if item.get('image_name')
+    ]
+    if not timestamps:
+        return 0, 0
+
+    total_time = (max(timestamps) - min(timestamps)).total_seconds()
+
+    sto_items = [
+        item for item in items if item.get('PredictedClass_4') == 'STO' and item.get('image_name')
+    ]
+    if sto_items:
+        sto_timestamps = [
+            datetime.strptime(item.get('image_name', '').rsplit('.', 1)[0], "%Y%m%d%H%M%S")
+            for item in sto_items
+        ]
+        defecation_time = (max(sto_timestamps) - min(sto_timestamps)).total_seconds()
+    else:
+        defecation_time = 0
+
+    return total_time, defecation_time
+
+def group_items_into_events(items, time_gap=600):
+    """
+    Group data into events based on time interval.
+
+    Args:
+        items: List of items sorted by timestamp.
+        time_gap: Maximum time interval (in seconds) between items within the same event.
+
+    Returns:
+        List of events, each event is a list of items.
+    """
+    events = []
+    current_event = []
+    last_timestamp = None
+
+    for item in items:
+        image_name = item.get('image_name', '')
+        if image_name:
+            try:
+                time_str = image_name.rsplit('.', 1)[0]
+                timestamp = datetime.strptime(time_str, "%Y%m%d%H%M%S")
+            except ValueError:
+                continue
+
+            if last_timestamp is None or (timestamp - last_timestamp).total_seconds() <= time_gap:
+                current_event.append(item)
+            else:
+                # Start a new event
+                events.append(current_event)
+                current_event = [item]
+            last_timestamp = timestamp
+
+    if current_event:
+        events.append(current_event)
+
+    return events
+
+def generate_graph(data):
+    """
+    Generate a line graph showing class predictions over time. The X-axis is elapsed time (in seconds), and the Y-axis is the weighted average.
+
+    Returns:
+        Base64-encoded PNG image.
+    """
+    if not data:
+        return None
+
+    # Prepare data
+    records = []
+    for item in data:
+        image_name = item.get('image_name', None)
+        probabilities = item.get('Probabilities_7', None)
+        if not image_name or not probabilities:
+            continue
+        try:
+            time_str = image_name.rsplit('.', 1)[0]
+            timestamp = datetime.strptime(time_str, "%Y%m%d%H%M%S")
+        except ValueError:
+            continue
+        record = {'Time': timestamp}
+        for bs_class, prob in probabilities.items():
+            record[bs_class] = float(prob)
+        records.append(record)
+
+    if not records:
+        return None
+
+    df = pd.DataFrame(records)
+    df.sort_values('Time', inplace=True)
+
+    # Convert time to elapsed seconds from the start
+    start_time = df['Time'].iloc[0]
+    df['Elapsed_Time'] = (df['Time'] - start_time).dt.total_seconds()
+
+    # Normalize probabilities
+    row_sums = df[['BS1', 'BS2', 'BS3', 'BS4', 'BS5', 'BS6', 'BS7']].sum(axis=1)
+    normalized_df = df[['BS1', 'BS2', 'BS3', 'BS4', 'BS5', 'BS6', 'BS7']].div(row_sums, axis=0)
+    normalized_df['Elapsed_Time'] = df['Elapsed_Time']
+
+    # Define class weights
+    category_mapping = {'BS1': 1, 'BS2': 2, 'BS3': 3, 'BS4': 4, 'BS5': 5, 'BS6': 6, 'BS7': 7}
+    categories = list(category_mapping.keys())
+    weights = [category_mapping[cat] for cat in categories]
+
+    # Calculate weighted average
+    normalized_df['Weighted_Avg'] = normalized_df[categories].dot(weights)
+
+    plt.figure(figsize=(6, 4), facecolor='none')  # Adjust figure size to match earlier modifications
+
+    plt.plot(normalized_df['Elapsed_Time'], normalized_df['Weighted_Avg'], marker='o', linestyle='-', color='white')
+
+    plt.xticks(color='white', fontsize=14)
+    plt.yticks(ticks=range(1, 8), labels=['BS1', 'BS2', 'BS3', 'BS4', 'BS5', 'BS6', 'BS7'], color='white', fontsize=14)
+    plt.gca().set_facecolor('none')  # Transparent background
+    plt.grid(True, color='#B0BEC5', linestyle='--', linewidth=1)
+    plt.tight_layout()
+    plt.gca().spines['bottom'].set_color('white')
+    plt.gca().spines['left'].set_color('white')
+    plt.gca().tick_params(colors='white')
+
+    # Remove X and Y labels, as well as title
+    plt.xlabel('')
+    plt.ylabel('')
+    plt.title('')
+
+    buffer = BytesIO()
+    plt.savefig(buffer, format='png', transparent=True)
+    buffer.seek(0)
+    image_png = buffer.getvalue()
+    buffer.close()
+    plt.close()
+
+    graph = base64.b64encode(image_png).decode('utf-8')
+
+    return graph
+
+def generate_bar_graph(data):
+    """
+    Generate a bar graph showing the average BS classification per day.
+
+    Returns:
+        Base64-encoded PNG image.
+    """
+    day_classifications = {}
+
+    for item in data:
+        image_name = item.get('image_name', '')
+        classification_str = item.get('PredictedClass_7', '')
+        if image_name and classification_str:
+            try:
+                time_str = image_name.rsplit('.', 1)[0]
+                image_time = datetime.strptime(time_str, "%Y%m%d%H%M%S")
+                day_str = image_time.strftime('%m-%d')
+                classification = int(classification_str[-1])  # Assuming 'BSx'
+            except ValueError:
+                continue
+            day_classifications.setdefault(day_str, []).append(classification)
+
+    if not day_classifications:
+        return None
+
+    days = sorted(day_classifications.keys())
+    avg_classifications = [np.mean(day_classifications[day]) for day in days]
+    # Set bar colors based on the average BS classification
+    bar_colors = []
+    for avg in avg_classifications:
+        if 1 <= avg <= 2:
+            bar_colors.append('#FF6D00')  # Orange for constipation
+        elif 3 <= avg <= 5:
+            bar_colors.append('#00C853')  # Green for normal
+        elif 6 <= avg <= 7:
+            bar_colors.append('#FFA726')  # Yellow for diarrhea
+        else:
+            bar_colors.append('grey')     # Default color
+
+    plt.figure(figsize=(6, 4), facecolor='none')  # Adjust figure size to match earlier modifications
+
+    x = np.arange(len(days))
+    plt.bar(x, avg_classifications, color=bar_colors)
+
+    plt.xticks(ticks=x, labels=days, color='white', fontsize=14)
+    plt.yticks(ticks=range(1, 8), labels=['BS1', 'BS2', 'BS3', 'BS4', 'BS5', 'BS6', 'BS7'], color='white', fontsize=14)
+    plt.ylabel('')  # Remove Y-axis label
+
+    plt.gca().set_facecolor('none')
+    plt.grid(True, color='#B0BEC5', linestyle='--', linewidth=1)
+    plt.tight_layout()
+    plt.gca().spines['bottom'].set_color('white')
+    plt.gca().spines['left'].set_color('white')
+    plt.gca().tick_params(colors='white')
+
+    # Remove unnecessary text
+    plt.xlabel('')
+    plt.title('')
+
+    buffer = BytesIO()
+    plt.savefig(buffer, format='png', transparent=True)
+    buffer.seek(0)
+    image_png = buffer.getvalue()
+    buffer.close()
+    plt.close()
+
+    graph = base64.b64encode(image_png).decode('utf-8')
+
+    return graph
+
+def display_results(request):
+    table = dynamodb.Table('phind_4class')
+    try:
+        response = table.scan()
+        items = response.get('Items', [])
+
+        if items:
+            # Sort items by timestamp
+            items.sort(
+                key=lambda x: datetime.strptime(
+                    x.get('image_name', '').rsplit('.', 1)[0], "%Y%m%d%H%M%S"
+                ) if x.get('image_name') else datetime.min
+            )
+
+            # Group data into events
+            events = group_items_into_events(items)
+            if events:
+                last_event_items = events[-1]  # Get data from the last event
+            else:
+                last_event_items = []
+
+            # Process data from the last event
+            percentages_3class = calculate_class_percentages(last_event_items, '3')
+            percentages_7class = calculate_seven_class_percentages(last_event_items)
+
+            top_3class = max(percentages_3class, key=percentages_3class.get)
+            top_3class_display = top_3class[0]  # Use the first letter
+
+            top_7class = max(percentages_7class, key=percentages_7class.get)
+
+            user_names = {item.get('user', 'Unknown') for item in last_event_items}
+            user_names.discard('Unknown')
+            user_name = next(iter(user_names)) if user_names else 'N/A'
+
+            total_time, defecation_time = calculate_times(last_event_items)
+            total_event_time = int(round(total_time))
+            defecation_time = int(round(defecation_time))
+            other_time = total_event_time - defecation_time
+
+            # Calculate percentages of defecation and other time
+            if total_event_time > 0:
+                defecation_percentage = (defecation_time / total_event_time) * 100
+                defecation_percentage = int(round(defecation_percentage))
+                other_percentage = 100 - defecation_percentage
+            else:
+                defecation_percentage = 0
+                other_percentage = 0
+
+            # Prepare data for defecation pie chart
+            defecationData = {
+                'Defecation': defecation_percentage,
+                'Other': other_percentage
+            }
+
+            # Convert data to JSON strings
+            percentages_3class_json = json.dumps(percentages_3class)
+            percentages_7class_json = json.dumps(percentages_7class)
+            defecationData_json = json.dumps(defecationData)
+
+            # Generate graphs
+            graph_7class = generate_graph(last_event_items)  # Use the updated generate_graph
+            graph_bar = generate_bar_graph(items)  # Use all data to generate bar graph
+
+            context = {
+                'results': items,
+                'percentages_3class': percentages_3class_json,
+                'percentages_7class': percentages_7class_json,
+                'defecationData': defecationData_json,
+                'top_3class': top_3class_display,
+                'top_3class_full': top_3class,
+                'top_7class': top_7class,
+                'user_name': user_name,
+                'total_event_time': total_event_time,
+                'defecation_time': defecation_time,
+                'defecation_percentage': defecation_percentage,
+                'other_time': other_time,
+                'graph_7class': graph_7class,
+                'graph_bar': graph_bar,
+            }
+        else:
+            context = {'error': 'No data found in DynamoDB.'}
+
+    except Exception as e:
+        print(f"Error fetching data from DynamoDB: {e}")
+        context = {'error': 'Error fetching data from DynamoDB.'}
+
+    return render(request, 'analysis/display_results.html', context)

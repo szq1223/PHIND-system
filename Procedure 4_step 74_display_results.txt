@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Analysis Results from DynamoDB</title>
+    <style>
+        /* Background and font */
+        body {
+            background-color: #1C2230;
+            color: #FFFFFF;
+            font-family: 'Roboto', 'Poppins', sans-serif;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            display: flex;
+            flex-direction: column;
+            align-items: center; /* Center the content */
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 10px; /* Reduce padding to move content up */
+        }
+        /* User information */
+        .user-info {
+            margin-top: 10px; /* Reduce top margin to move it further up */
+            font-size: 42px; /* Increase font size */
+            font-weight: bold;
+            color: #FFFFFF;
+            text-align: left; /* Align text to the left */
+            width: 100%; /* Occupy full container width */
+            padding-left: 90px; /* Move to the right */
+            box-sizing: border-box; /* Include padding in width */
+        }
+        /* Layer structure */
+        .layer {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center; /* Center elements within layer */
+            align-items: center;
+            width: 100%;
+            margin: 1px 0; /* Further reduce spacing between layers */
+        }
+        /* Ring chart style for the first and second layers */
+        .ring-chart {
+            width: 330px; /* Increase size */
+            height: 330px; /* Increase size */
+            margin: 10px; /* Reduce margin */
+            position: relative;
+        }
+        .ring-chart canvas {
+            width: 100% !important;
+            height: 100% !important;
+        }
+        .ring-chart .center-text {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #FFFFFF; /* Default white */
+            font-size: 90px; /* Increase font size */
+            text-align: center;
+            pointer-events: none;
+            font-family: 'Roboto', 'Poppins', sans-serif;
+        }
+        /* Time information */
+        .time-info {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin: 10px; /* Reduce margin */
+            text-align: center;
+        }
+        .time-entry {
+            margin-bottom: 15px; /* Reduce margin */
+        }
+        .time-label {
+            font-size: 45px; /* Increase font size */
+            color: #00E5FF;
+            font-weight: bold; /* Make font bold */
+        }
+        .time-value {
+            font-size: 90px; /* Increase font size */
+            font-weight: bold;
+            color: #D1FFFB; /* Change color */
+        }
+        .time-unit {
+            font-size: 36px; /* Increase font size */
+            color: #D1FFFB; /* Change color */
+        }
+        /* Chart container */
+        .chart-container {
+            width: 90%;
+            max-width: 500px;
+            height: auto;
+            margin: 10px; /* Reduce margin */
+            border-radius: 15px;
+            overflow: hidden;
+        }
+        /* Adjust width for third and fourth layer charts */
+        .wide-chart-container {
+            width: 135%; /* Increase width by 15% */
+            max-width: 690px; /* Adjust max width as needed */
+            height: auto; /* Keep height unchanged */
+        }
+        /* Restore background colors */
+        #chart-7class {
+            background-color: #8CCA8F;
+        }
+        #chart-bar {
+            background-color: #F8BBD0;
+        }
+        /* Adjust image to fit new width */
+        img.img-fluid {
+            width: 100%;
+            height: auto; /* Keep height unchanged */
+            object-fit: cover; /* Maintain image ratio and fill container */
+        }
+        /* Hide scrollbar */
+        ::-webkit-scrollbar {
+            display: none;
+        }
+        /* Responsive adjustments */
+        @media (max-width: 768px) {
+            .wide-chart-container {
+                width: 100%; /* Reset to 100% width on smaller screens */
+                max-width: 100%;
+            }
+            .ring-chart {
+                width: 100%; /* Adjust width on smaller screens */
+                height: auto;
+            }
+            .center-text {
+                font-size: 60px; /* Adjust center text size */
+            }
+            .user-info {
+                font-size: 28px; /* Adjust user info font size */
+                padding-left: 0; /* Remove left padding */
+            }
+            .time-label {
+                font-size: 30px; /* Adjust time label font size */
+            }
+            .time-value {
+                font-size: 60px; /* Adjust time value font size */
+            }
+            .time-unit {
+                font-size: 24px; /* Adjust time unit font size */
+            }
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <div class="container">
+        <!-- User information -->
+        <div class="user-info">
+            User: {{ user_name }}
+        </div>
+        <!-- First layer -->
+        <div class="layer" id="layer1">
+            <!-- 3-class ring chart -->
+            <div class="ring-chart" id="ring-chart-3class">
+                <canvas id="ring-3class"></canvas>
+                <div class="center-text" id="center-text-3class">{{ top_3class }}</div>
+            </div>
+            <!-- 7-class ring chart -->
+            <div class="ring-chart" id="ring-chart-7class">
+                <canvas id="ring-7class"></canvas>
+                <div class="center-text" style="color: #EDE0F0;">{{ top_7class }}</div>
+            </div>
+        </div>
+        <!-- Second layer -->
+        <div class="layer" id="layer2">
+            <!-- Defecation time ring chart -->
+            <div class="ring-chart" id="ring-chart-defecation">
+                <canvas id="ring-defecation"></canvas>
+                <div class="center-text" style="color: #76FEF1;">{{ defecation_percentage }}%</div>
+            </div>
+            <!-- Display total time and defecation time -->
+            <div class="time-info">
+                <div class="time-entry">
+                    <span class="time-label">Total time:</span><br>
+                    <span class="time-value">{{ total_event_time }}</span>
+                    <span class="time-unit">s</span>
+                </div>
+                <div class="time-entry">
+                    <span class="time-label">Defecation time:</span><br>
+                    <span class="time-value">{{ defecation_time }}</span>
+                    <span class="time-unit">s</span>
+                </div>
+            </div>
+        </div>
+        <!-- Third layer -->
+        <div class="layer" id="layer3">
+            <!-- Lower-left chart -->
+            <div class="chart-container wide-chart-container" id="chart-7class">
+                {% if graph_7class %} 
+                    <img src="data:image/png;base64,{{ graph_7class }}" alt="7-Class Graph" class="img-fluid" />
+                {% else %}
+                    <p class="text-center">No valid data for 7-Class graph generation.</p>
+                {% endif %}
+            </div>
+        </div>
+        <!-- Fourth layer -->
+        <div class="layer" id="layer4">
+            <!-- Lower-right chart -->
+            <div class="chart-container wide-chart-container" id="chart-bar">
+                {% if graph_bar %}
+                    <img src="data:image/png;base64,{{ graph_bar }}" alt="Daily Classification Results" class="img-fluid" />
+                {% else %}
+                    <p class="text-center">No valid data for daily classification results.</p>
+                {% endif %}
+            </div>
+        </div>
+        <!-- Other content -->
+    </div>
+    
+    <!-- Include JavaScript libraries -->
+    <script>
+        // Parse data from the context
+        const percentages_3class = JSON.parse('{{ percentages_3class|escapejs }}');
+        const percentages_7class = JSON.parse('{{ percentages_7class|escapejs }}');
+        const defecationData = JSON.parse('{{ defecationData|escapejs }}');
+
+        function renderRingChart(elementId, data, colors, options = {}) {
+            const ctx = document.getElementById(elementId).getContext('2d');
+            new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: Object.keys(data),
+                    datasets: [{
+                        data: Object.values(data),
+                        backgroundColor: colors,
+                        hoverOffset: 4,
+                        borderWidth: 1,
+                        borderColor: '#1C2230'
+                    }]
+                },
+                options: Object.assign({
+                    cutout: '70%',
+                    plugins: {
+                        legend: {
+                            display: false
+                        }
+                    }
+                }, options)
+            });
+        }
+
+        // Ring chart colors
+        // 3-class prediction colors, order matches data order: Normal, Constipation, Diarrhea
+        renderRingChart('ring-3class', percentages_3class, ['#00C853', '#FF6D00', '#FFA726']);
+
+        // 7-class prediction colors
+        renderRingChart('ring-7class', percentages_7class, ['#D1C4E9', '#B39DDB', '#9575CD', '#7E57C2', '#673AB7', '#5E35B1', '#512DA8']);
+
+        // Defecation time ring chart
+        renderRingChart('ring-defecation', {
+            'Defecation': defecationData['Defecation'],
+            'Other': defecationData['Other']
+        }, ['#01F1DA', '#D1FFFB'], {
+            rotation: 0,
+            circumference: 360,
+            cutout: '70%',
+            plugins: {
+                legend: {
+                    display: false
+                }
+            }
+        });
+
+        // Change the color of the center text for the first ring chart
+        const top3Class = '{{ top_3class_full }}';
+        const centerText3Class = document.getElementById('center-text-3class');
+        if (top3Class === 'Normal') {
+            centerText3Class.style.color = '#DBEDDC';
+        } else if (top3Class === 'Constipation') {
+            centerText3Class.style.color = '#FFBF61';
+        } else if (top3Class === 'Diarrhea') {
+            centerText3Class.style.color = '#FFFF79';
+        }
+    </script>
+</body>
+</html>

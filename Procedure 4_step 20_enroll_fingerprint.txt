@@ -1,0 +1,68 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+import sys
+from pyfingerprint.pyfingerprint import PyFingerprint
+
+# Initialize fingerprint sensor
+try:
+    f = PyFingerprint('/dev/ttyUSB0', 57600, 0xFFFFFFFF, 0x00000000)
+
+    if not f.verifyPassword():
+        raise ValueError('The fingerprint sensor password is incorrect!')
+
+except Exception as e:
+    print('Failed to initialize the fingerprint sensor!')
+    print('Error message:', str(e))
+    sys.exit(1)
+
+# Get some information about the sensor
+print(f'Templates used: {f.getTemplateCount()}/{f.getStorageCapacity()}')
+
+# Register a new fingerprint
+try:
+    print('Waiting for finger...')
+
+    # Wait to read the fingerprint image
+    while not f.readImage():
+        pass
+
+    # Convert the image to characteristics and store in charbuffer 1
+    f.convertImage(0x01)
+
+    # Check if the fingerprint is already registered
+    result = f.searchTemplate()
+    positionNumber = result[0]
+
+    if positionNumber >= 0:
+        print(f'The fingerprint already exists at position #{positionNumber}')
+        sys.exit(0)
+
+    print('Please remove your finger...')
+    # Wait for the finger to be removed
+    while f.readImage():
+        pass
+
+    print('Please press the same finger again...')
+    # Wait to read the same fingerprint again
+    while not f.readImage():
+        pass
+
+    # Convert the image to characteristics and store in charbuffer 2
+    f.convertImage(0x02)
+
+    # Compare the characteristics of the two fingerprints
+    if f.compareCharacteristics() == 0:
+        raise Exception('The two fingerprints do not match!')
+
+    # Create a template
+    f.createTemplate()
+
+    # Store the template in the next available position
+    positionNumber = f.storeTemplate()
+    print(f'Fingerprint successfully registered at position #{positionNumber}')
+
+except Exception as e:
+    print('Operation failed!')
+    print('Error message:', str(e))
+    sys.exit(1)

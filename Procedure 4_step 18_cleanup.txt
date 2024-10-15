@@ -1,0 +1,21 @@
+# cleanup.py
+
+def cleanup_resources(led_control, pressure_monitor):
+    """
+    Cleanup GPIO resources used by the LED control and pressure monitor.
+
+    Parameters:
+    - led_control (LEDControl): The instance of LEDControl used in the program.
+    - pressure_monitor (PressureMonitor): The instance of PressureMonitor used in the program.
+    """
+    # Cleanup LED GPIOs
+    if led_control:
+        led_control.cleanup()
+        print("LED GPIO cleanup complete.")
+
+    # Cleanup pressure sensor GPIOs
+    if pressure_monitor:
+        pressure_monitor.cleanup()
+        print("Pressure sensor GPIO cleanup complete.")
+
+    print("All GPIO resources have been released.")
