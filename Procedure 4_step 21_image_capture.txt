@@ -29,6 +29,6 @@ class ImageCapture:
         while not self.stop_event.is_set():
             if self.capturing_event.is_set():
                 self.capture_image()
-                time.sleep(0.5)  # Capture image every 0.5 seconds
+                time.sleep(1)  # Capture image every 1 second
             else:
-                time.sleep(0.5)
+                time.sleep(1)
