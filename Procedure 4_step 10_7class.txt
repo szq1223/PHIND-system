@@ -37,7 +37,7 @@ class CustomDataset(Dataset):
         image = Image.open(img_path).convert("RGB")
         label = self.labels[idx]
 
-        # Apply default transform (fine-tuning augmentation can be added here as needed)
+        # Apply default transform
         if self.transform:
             image = self.transform(image)
 
@@ -58,7 +58,7 @@ for class_name in valid_folders:
                 samples.append(img_path)
                 labels.append(class_to_idx[class_name])
 
-# Ensure all labels are within the [0, 6] range
+# Ensure labels are within the [0, 6] range
 for idx, label in enumerate(labels):
     if label < 0 or label >= 7:
         print(f"Found an invalid label at index {idx}: {label}")
@@ -76,29 +76,33 @@ val_dataset = CustomDataset(val_samples, val_labels, transform=transform_default
 train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
 val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
 
-# Define the model
-model = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.IMAGENET1K_V1)
-num_ftrs = model.classifier[1].in_features  # Get the number of input features for the last fully connected layer
+# ----------------------------------------------------------------------
+# OLD LINE (before PyTorch update):
+# model = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.IMAGENET1K_V1)
 
-# Modify the last layer for seven-class classification
+# NEW LINE (with 'weights_only=False'):
+model = models.efficientnet_b0(
+    weights=models.EfficientNet_B0_Weights.IMAGENET1K_V1,
+    weights_only=False  # <-- Added parameter to ensure correct state_dict loading
+)
+# ----------------------------------------------------------------------
+
+num_ftrs = model.classifier[1].in_features
 model.classifier[1] = nn.Linear(num_ftrs, 7)
 
-# Move the model to the appropriate device (GPU if available)
+# Move the model to the appropriate device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model = model.to(device)
 
 # Define the loss function and optimizer
-# Note: fine-tuning hyperparameters are hidden, this can be adjusted as needed
-# Example: you can add specific class weights, change learning rate, etc.
 criterion = nn.CrossEntropyLoss()
-optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)  # Fine-tuned learning rate is hidden here
+optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 
 # Ensure the model save directory exists
 model_save_dir = r"C:\7class\saved_models"
 os.makedirs(model_save_dir, exist_ok=True)
 
-# Training the model
-num_epochs = 50  # Number of epochs can be adjusted based on fine-tuning
+num_epochs = 50
 best_val_acc = 0.0
 early_stopping_patience = 10
 no_improvement_epochs = 0
@@ -155,20 +159,21 @@ for epoch in range(num_epochs):
     val_acc = val_correct / val_total
     val_acc_history.append(val_acc)
 
-    print(f'Epoch {epoch + 1}/{num_epochs}, Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f}')
+    print(f'Epoch {epoch + 1}/{num_epochs}, Loss: {train_loss:.4f}, '
+          f'Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f}')
 
-    # Save the best model and prediction results
+    # Save the best model
     if val_acc > best_val_acc:
         best_val_acc = val_acc
         best_test_preds = val_preds
         best_test_labels = val_labels_list
-        torch.save(model, os.path.join(model_save_dir, '7class.pth'))  # Save the complete model
+        torch.save(model, os.path.join(model_save_dir, '7class.pth'))
         print(f"Best model saved: epoch {epoch + 1}")
         no_improvement_epochs = 0
     else:
         no_improvement_epochs += 1
 
-    # Early stopping mechanism
+    # Early stopping
     if no_improvement_epochs >= early_stopping_patience:
         print(f"Early stopping triggered at epoch {epoch + 1}")
         break
@@ -176,7 +181,7 @@ for epoch in range(num_epochs):
 # Load the best model for testing
 model = torch.load(os.path.join(model_save_dir, '7class.pth'))
 
-# Plot the graph of EPOCH and train, test accuracy
+# Plot EPOCH and train/validation accuracy
 plt.figure(figsize=(10, 5))
 plt.plot(range(1, len(train_acc_history) + 1), train_acc_history, label='Train Accuracy')
 plt.plot(range(1, len(val_acc_history) + 1), val_acc_history, label='Validation Accuracy')
@@ -186,15 +191,14 @@ plt.title('Train and Validation Accuracy over Epochs')
 plt.legend()
 plt.show()
 
-# Compute the classification report and confusion matrix for the predictions of the best model
+# Compute the classification report and confusion matrix
 cr = classification_report(best_test_labels, best_test_preds, target_names=valid_folders, zero_division=1)
 print("Classification Report:\n", cr)
 
-# Plot the confusion matrix
 cm = confusion_matrix(best_test_labels, best_test_preds)
 plt.figure(figsize=(10, 7))
-sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=valid_folders,
-            yticklabels=valid_folders)
+sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+            xticklabels=valid_folders, yticklabels=valid_folders)
 plt.xlabel('Predicted')
 plt.ylabel('True')
 plt.title('Confusion Matrix for BS1 to BS7 (Best Epoch)')

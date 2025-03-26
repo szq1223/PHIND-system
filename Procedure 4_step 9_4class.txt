@@ -32,12 +32,12 @@ data_transforms = {
         transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.3),
         transforms.RandomAffine(degrees=0, translate=(0.1, 0.1)),
         transforms.RandomErasing(),
-        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])  # Normalize
+        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
     ]),
     'val': transforms.Compose([
         transforms.Resize((224, 224)),
-        transforms.ToTensor(),  # Convert to tensor
-        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])  # Normalize
+        transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
     ]),
     'augment_uri': transforms.Compose([
         transforms.Resize((224, 224)),
@@ -87,16 +87,25 @@ class FocalLoss(nn.Module):
         else:
             return torch.sum(F_loss)
 
-# Load EfficientNetB0 model
-model = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.IMAGENET1K_V1)  # Load pre-trained weights
+# ----------------------------------------------------------------------
+# OLD LINE (before PyTorch update):
+# model = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.IMAGENET1K_V1)
+
+# NEW LINE (with 'weights_only=False'):
+model = models.efficientnet_b0(
+    weights=models.EfficientNet_B0_Weights.IMAGENET1K_V1,
+    weights_only=False  # <-- Added parameter to ensure correct state_dict loading
+)
+# ----------------------------------------------------------------------
+
 for param in model.parameters():
     param.requires_grad = True  # Unfreeze all layers
 
 # Modify the fully connected layer to use for 4-class classification
 num_ftrs = model.classifier[1].in_features
 model.classifier = nn.Sequential(
-    nn.Dropout(p=0.5),  # Add Dropout
-    nn.Linear(num_ftrs, len(categories))  # Output size equals the number of classes
+    nn.Dropout(p=0.5),
+    nn.Linear(num_ftrs, len(categories))
 )
 model = model.to(device)
 
@@ -104,7 +113,6 @@ model = model.to(device)
 optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9, weight_decay=1e-4)
 scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=10, eta_min=1e-5)
 
-# Train and evaluate the model
 def train_and_evaluate(model, train_loader, val_loader, criterion, optimizer, scheduler, num_epochs, early_stopping_patience):
     best_val_acc = 0.0
     no_improvement_epochs = 0
@@ -152,25 +160,21 @@ def train_and_evaluate(model, train_loader, val_loader, criterion, optimizer, sc
         val_acc = val_running_corrects.double() / len(val_loader.dataset)
         val_acc_history.append(val_acc.item())
 
-        # Print loss and accuracy for each epoch
         print(f'Epoch {epoch + 1}/{num_epochs}, Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f}')
-
-        # Update learning rate
         scheduler.step()
 
-        # Save the best model and its predictions
+        # Check for best model
         if val_acc > best_val_acc:
             best_val_acc = val_acc
             best_test_preds = val_preds
             best_test_labels = val_labels_list
-            # Save the complete model
             torch.save(model, os.path.join(model_save_dir, '4class.pth'))
             print(f"Best model saved: epoch {epoch + 1}")
             no_improvement_epochs = 0
         else:
             no_improvement_epochs += 1
 
-        # Early stopping mechanism
+        # Early stopping
         if no_improvement_epochs >= early_stopping_patience:
             print(f"Early stopping triggered at epoch {epoch + 1}")
             break
@@ -188,15 +192,15 @@ def train_and_evaluate(model, train_loader, val_loader, criterion, optimizer, sc
 
     return best_test_preds, best_test_labels
 
-# Start training and evaluating the model
-criterion = FocalLoss()  # Use Focal Loss instead of Cross-Entropy Loss
-best_test_preds, best_test_labels = train_and_evaluate(model, train_loader, val_loader, criterion, optimizer, scheduler, num_epochs, early_stopping_patience)
+criterion = FocalLoss()
+best_test_preds, best_test_labels = train_and_evaluate(
+    model, train_loader, val_loader, criterion, optimizer, scheduler,
+    num_epochs, early_stopping_patience
+)
 
-# Compute the classification report and confusion matrix for the best model
 cr = classification_report(best_test_labels, best_test_preds, target_names=categories, zero_division=1)
 print("Classification Report:\n", cr)
 
-# Plot confusion matrix
 cm = confusion_matrix(best_test_labels, best_test_preds)
 plt.figure(figsize=(10, 7))
 sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=categories, yticklabels=categories)
