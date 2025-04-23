@@ -1,0 +1,274 @@
+import boto3
+import json
+import time
+from datetime import datetime
+from decimal import Decimal
+import re
+
+# Initialize AWS clients
+ssm_client = boto3.client('ssm')
+dynamodb = boto3.resource('dynamodb')
+s3_client = boto3.client('s3')
+
+# Configuration
+EC2_INSTANCE_ID = 'INSERT_YOUR_EC2_INSTANCE_ID'  # Replace with your EC2 instance ID
+VIRTUAL_ENV_PATH = '/home/ec2-user/phind_env/bin/activate'  # Replace with your virtual environment path
+DOWNLOAD_COMMAND_TEMPLATE = 'aws s3 cp {} /home/ec2-user/models/'  # Command to download images using AWS CLI
+
+# Define command templates for different analysis tasks
+ANALYZE_COMMAND_4CLASS = 'source {} && python3 /home/ec2-user/models/analyze_4class.py /home/ec2-user/models/{}'
+ANALYZE_COMMAND_3CLASS = 'source {} && python3 /home/ec2-user/models/analyze_3class.py /home/ec2-user/models/{}'
+ANALYZE_COMMAND_7CLASS = 'source {} && python3 /home/ec2-user/models/analyze_7class.py /home/ec2-user/models/{}'
+
+DYNAMODB_TABLE_NAME = 'INSERT_YOUR_DYNAMODB_TABLE_NAME'  # Replace with your DynamoDB table name
+
+def execute_command_on_ec2(command, retries=5, initial_wait=10):
+    """
+    Execute a command on the EC2 instance using SSM with retry logic and exponential backoff.
+
+    :param command: The command to be executed.
+    :param retries: Number of retries in case of failure.
+    :param initial_wait: Initial wait time in seconds before retrying.
+    :return: Standard output content of the executed command.
+    """
+    wait_time = initial_wait
+    for attempt in range(retries):
+        try:
+            response = ssm_client.send_command(
+                InstanceIds=[EC2_INSTANCE_ID],
+                DocumentName='AWS-RunShellScript',
+                Parameters={'commands': [command]}
+            )
+            command_id = response['Command']['CommandId']
+            
+            # Initial wait before checking the command status
+            time.sleep(wait_time)
+            
+            # Check command status
+            result = ssm_client.get_command_invocation(
+                CommandId=command_id,
+                InstanceId=EC2_INSTANCE_ID
+            )
+            
+            if result['Status'] == 'Success':
+                return result['StandardOutputContent']
+            elif result['Status'] == 'Failed':
+                print(f"Attempt {attempt+1}: Command execution failed with status: Failed")
+                break
+            else:
+                print(f"Attempt {attempt+1}: Command execution in progress with status: {result['Status']}")
+
+            # Exponential backoff for next retry
+            wait_time *= 2
+
+        except Exception as e:
+            print(f"Attempt {attempt+1}: Error executing command on EC2: {str(e)}")
+            # Exponential backoff for next retry
+            wait_time *= 2
+    
+    raise RuntimeError(f"Failed to execute command on EC2 after {retries} attempts.")
+
+def save_to_dynamodb(image_name, upload_time, predicted_class_4=None, probabilities_4=None,
+                     predicted_class_3=None, probabilities_3=None,
+                     predicted_class_7=None, probabilities_7=None, user=None, total_event_time=None):
+    """
+    Save the analysis results to DynamoDB with a unified structure.
+    """
+    table = dynamodb.Table(DYNAMODB_TABLE_NAME)
+    item = {
+        'image_name': image_name,
+        'UploadTime': upload_time,
+    }
+
+    # Add optional fields based on provided results
+    if predicted_class_4 and probabilities_4:
+        probabilities_4_decimal = {k: Decimal(str(v)) for k, v in probabilities_4.items()}
+        item['PredictedClass_4'] = predicted_class_4
+        item['Probabilities_4'] = probabilities_4_decimal
+
+    if predicted_class_3 and probabilities_3:
+        probabilities_3_decimal = {k: Decimal(str(v)) for k, v in probabilities_3.items()}
+        item['PredictedClass_3'] = predicted_class_3
+        item['Probabilities_3'] = probabilities_3_decimal
+
+    if predicted_class_7 and probabilities_7:
+        probabilities_7_decimal = {k: Decimal(str(v)) for k, v in probabilities_7.items()}
+        item['PredictedClass_7'] = predicted_class_7
+        item['Probabilities_7'] = probabilities_7_decimal
+
+    if user and total_event_time is not None:
+        item['user'] = user
+        item['total_event_time'] = Decimal(str(total_event_time))
+
+    print(f"Saving to DynamoDB: {item}")  # Debugging: Print the item before saving
+    table.put_item(Item=item)
+
+def parse_analysis_result(output, class_type='4'):
+    """
+    Parse the output from the model analysis on EC2 instance.
+
+    :param output: The output string from the analysis.
+    :param class_type: The type of analysis ('4' for 4-class, '3' for 3-class, '7' for 7-class).
+    :return: Tuple of (predicted_class, probabilities)
+    """
+    # Ensure output is not empty or None
+    if not output:
+        raise ValueError("Error: Empty output from EC2 instance analysis.")
+    
+    # Split the output into lines and strip each line to remove extra spaces
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    print(f"Output from analysis: {lines}")  # Debugging: Print all lines of output
+
+    # Initialize variables to store predicted class and probabilities
+    predicted_class = None
+    probabilities = {}
+
+    # Use specific regex patterns based on class type
+    if class_type == '4':
+        predicted_class_pattern = re.compile(r'Predicted Class:\s*(\w+)|PredictedClass_4:\s*(\w+)')  # Enhanced regex pattern for 4-class
+        probability_pattern = re.compile(r'(CLE|STO|URI|TPI):\s*([\d.]+)')
+    elif class_type == '3':
+        predicted_class_pattern = re.compile(r'PredictedClass:\s*(Class[123])')  # Updated regex pattern for 3-class
+        probability_pattern = re.compile(r'(Class1|Class2|Class3):\s*([\d.]+)')
+    elif class_type == '7':
+        predicted_class_pattern = re.compile(r'PredictedClass:\s*(BS[1-7])')  # Updated regex pattern for 7-class
+        probability_pattern = re.compile(r'(BS1|BS2|BS3|BS4|BS5|BS6|BS7):\s*([\d.]+)')
+    else:
+        raise ValueError("Error: Unsupported class type provided for analysis.")
+
+    # Define mappings for class names
+    class_mappings_3 = {
+        'Class1': 'Constipation',
+        'Class2': 'Normal',
+        'Class3': 'Diarrhea'
+    }
+
+    for line in lines:
+        # Match the predicted class using regex
+        class_match = predicted_class_pattern.search(line)
+        if class_match:
+            predicted_class = class_match.group(1)
+            
+            # Map the predicted class to human-readable names for 3-class analysis
+            if class_type == '3':
+                predicted_class = class_mappings_3.get(predicted_class, predicted_class)
+        
+        # Match probabilities using regex
+        prob_match = probability_pattern.search(line)
+        if prob_match:
+            key = prob_match.group(1)
+            
+            # Map the probabilities keys to human-readable names for 3-class analysis
+            if class_type == '3':
+                key = class_mappings_3.get(key, key)
+            
+            value = float(prob_match.group(2))
+            probabilities[key] = value
+
+    # Ensure we have both predicted class and probabilities
+    if not predicted_class:
+        raise ValueError(f"Error: Predicted Class for {class_type}-class not found in output.")
+    if not probabilities:
+        raise ValueError(f"Error: Probabilities for {class_type}-class not found in output.")
+
+    return predicted_class, probabilities
+
+def lambda_handler(event, context):
+    """
+    Main Lambda function to process SQS messages and analyze uploaded images or JSON data.
+    """
+    for record in event['Records']:
+        try:
+            message_body = json.loads(record['body'])
+            print(f"Message Body: {message_body}")  # Debugging: Print the message body to understand its structure
+
+            # Ensure the message body contains valid 'Records' field
+            if 'Records' in message_body and isinstance(message_body['Records'], list) and len(message_body['Records']) > 0:
+                s3_record = message_body['Records'][0].get('s3', {})
+                bucket_info = s3_record.get('bucket', {})
+                object_info = s3_record.get('object', {})
+                
+                if 'name' in bucket_info and 'key' in object_info:
+                    bucket = bucket_info['name']
+                    key = object_info['key']
+                    upload_time = datetime.now().isoformat()
+                    s3_file_path = f's3://{bucket}/{key}'
+
+                    # Check if the file is a JSON file
+                    if key.endswith('.json'):
+                        # Download JSON file from S3
+                        response = s3_client.get_object(Bucket=bucket, Key=key)
+                        json_data = json.loads(response['Body'].read().decode('utf-8'))
+
+                        # Extract user and event time
+                        user = json_data.get('user')
+                        total_event_time = json_data.get('total_event_time')
+
+                        # Save JSON data to DynamoDB
+                        save_to_dynamodb(key, upload_time, user=user, total_event_time=total_event_time)
+                        print(f"JSON data saved for {key}")
+
+                    else:
+                        # Only analyze image files, not JSON files
+                        download_command = DOWNLOAD_COMMAND_TEMPLATE.format(s3_file_path)
+                        analyze_4class_command = ANALYZE_COMMAND_4CLASS.format(VIRTUAL_ENV_PATH, key)
+
+                        # Run 4-class analysis on EC2 instance
+                        execute_command_on_ec2(download_command)  # Download the image
+                        result_4class = execute_command_on_ec2(analyze_4class_command)
+
+                        # Process 4-class result
+                        try:
+                            predicted_class_4, probabilities_4 = parse_analysis_result(result_4class, class_type='4')
+                            print(f"4-Class Analysis Result: Predicted Class: {predicted_class_4}, Probabilities: {probabilities_4}")
+                        except Exception as e:
+                            print(f"Error parsing 4-class result: {str(e)}")
+                            continue  # Skip this message and move to the next one
+
+                        # Initialize variables for optional fields
+                        predicted_class_3 = None
+                        probabilities_3 = None
+                        predicted_class_7 = None
+                        probabilities_7 = None
+
+                        # If the predicted class is STO, proceed with 3-class and 7-class analysis
+                        if predicted_class_4 == 'STO':
+                            print(f"Running 3-class and 7-class analysis for STO prediction on {key}")
+                            
+                            # Run 3-class analysis using the same image
+                            analyze_3class_command = ANALYZE_COMMAND_3CLASS.format(VIRTUAL_ENV_PATH, key)
+                            try:
+                                result_3class = execute_command_on_ec2(analyze_3class_command)
+                                predicted_class_3, probabilities_3 = parse_analysis_result(result_3class, class_type='3')
+                                print(f"3-Class Analysis Result: Predicted Class: {predicted_class_3}, Probabilities: {probabilities_3}")
+                            except Exception as e:
+                                print(f"Error parsing 3-class result: {str(e)}")
+
+                            # Run 7-class analysis using the same image
+                            analyze_7class_command = ANALYZE_COMMAND_7CLASS.format(VIRTUAL_ENV_PATH, key)
+                            try:
+                                result_7class = execute_command_on_ec2(analyze_7class_command)
+                                predicted_class_7, probabilities_7 = parse_analysis_result(result_7class, class_type='7')
+                                print(f"7-Class Analysis Result: Predicted Class: {predicted_class_7}, Probabilities: {probabilities_7}")
+                            except Exception as e:
+                                print(f"Error parsing 7-class result: {str(e)}")
+
+                        # Save all results to DynamoDB (excluding json_data, PredictedClass_4, Probabilities_4)
+                        save_to_dynamodb(
+                            key,
+                            upload_time,
+                            predicted_class_4,
+                            probabilities_4,
+                            predicted_class_3,
+                            probabilities_3,
+                            predicted_class_7,
+                            probabilities_7
+                        )
+                else:
+                    print("Error: S3 bucket or object information missing in the message body.")
+            else:
+                print("Error: No valid 'Records' found in the SQS message.")
+
+        except Exception as e:
+            print(f"Error processing message from SQS: {str(e)}")
+            continue  # Skip this message and process the next one

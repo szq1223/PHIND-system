@@ -1,0 +1,116 @@
+# pressure_sensor.py
+
+import time
+import lgpio
+
+class PressureMonitor:
+    SPICLK = 11   # GPIO11 - SCLK
+    SPIMISO = 9  # GPIO9 - MISO
+    SPIMOSI = 10  # GPIO10 - MOSI
+    SPICS = 8    # GPIO8 - CS
+
+    def __init__(self, stop_event, capturing_event, fingerprint_active_event, led_control, x_data, y_data, led_off_countdown):
+        self.stop_event = stop_event
+        self.capturing_event = capturing_event
+        self.fingerprint_active_event = fingerprint_active_event
+        self.led_control = led_control
+        self.threshold = 150
+        self.wait_time = 30  # 30 seconds wait time after pressure goes below threshold
+        self.x_data = x_data
+        self.y_data = y_data
+        self.led_off_countdown = led_off_countdown
+
+        # Initialize GPIO
+        self.h = lgpio.gpiochip_open(0)
+
+        # Initialize MCP3008 pins
+        lgpio.gpio_claim_output(self.h, self.SPICS)
+        lgpio.gpio_claim_output(self.h, self.SPICLK)
+        lgpio.gpio_claim_output(self.h, self.SPIMOSI)
+        lgpio.gpio_claim_input(self.h, self.SPIMISO)
+
+    def read_adc(self, adcnum):
+        """Read SPI data from the MCP3008 chip."""
+        if adcnum > 7 or adcnum < 0:
+            return -1
+
+        # Start the SPI communication
+        lgpio.gpio_write(self.h, self.SPICS, 1)
+        lgpio.gpio_write(self.h, self.SPICLK, 0)
+        lgpio.gpio_write(self.h, self.SPICS, 0)
+
+        commandout = adcnum
+        commandout |= 0x18  # Start bit + single-ended bit
+        commandout <<= 3    # Shift to match the protocol
+
+        for i in range(5):
+            if commandout & 0x80:
+                lgpio.gpio_write(self.h, self.SPIMOSI, 1)
+            else:
+                lgpio.gpio_write(self.h, self.SPIMOSI, 0)
+            commandout <<= 1
+            lgpio.gpio_write(self.h, self.SPICLK, 1)
+            lgpio.gpio_write(self.h, self.SPICLK, 0)
+
+        adcout = 0
+        for i in range(12):
+            lgpio.gpio_write(self.h, self.SPICLK, 1)
+            lgpio.gpio_write(self.h, self.SPICLK, 0)
+            adcout <<= 1
+            if lgpio.gpio_read(self.h, self.SPIMISO):
+                adcout |= 0x1
+
+        lgpio.gpio_write(self.h, self.SPICS, 1)
+
+        adcout >>= 1  # Drop the null bit
+        return adcout
+
+    def run(self):
+        led_on = False
+        below_threshold_time = 0
+
+        start_time = time.time()
+
+        while not self.stop_event.is_set():
+            sensor_value = self.read_adc(0)  # Read from ADC channel 0
+            current_time = time.time() - start_time
+
+            # Append data for plotting
+            self.x_data.append(current_time)
+            self.y_data.append(sensor_value)
+
+            if sensor_value > self.threshold:
+                if not led_on:
+                    self.led_control.turn_on()
+                    led_on = True
+                    self.capturing_event.set()         # Start capturing images
+                    self.fingerprint_active_event.clear()  # Deactivate fingerprint sensor
+                    print("Pressure above threshold. LED ON. Starting image capture.")
+                below_threshold_time = 0  # Reset time counter
+                self.led_off_countdown[0] = 0
+            else:
+                if not self.fingerprint_active_event.is_set():
+                    print("Pressure below threshold. Activating fingerprint sensor.")
+                    self.fingerprint_active_event.set()  # Activate fingerprint sensor
+
+                if led_on:
+                    if below_threshold_time == 0:
+                        below_threshold_time = time.time()
+                    elif time.time() - below_threshold_time >= self.wait_time:
+                        self.led_control.turn_off()
+                        led_on = False
+                        self.capturing_event.clear()  # Stop capturing images
+                        print("Pressure below threshold for 30 seconds. LED OFF. Stopping image capture.")
+
+                        # Set the stop_event to end the event
+                        self.stop_event.set()
+                        print("Pressure remained below threshold for 30 seconds. Event ending.")
+
+                    else:
+                        countdown = self.wait_time - int(time.time() - below_threshold_time)
+                        self.led_off_countdown[0] = countdown
+            time.sleep(1)
+
+    def cleanup(self):
+        # Release GPIO resources used by the pressure sensor
+        lgpio.gpiochip_close(self.h)

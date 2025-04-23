@@ -1,0 +1,63 @@
+import lgpio
+import time
+
+# SPI pin definitions
+SPICLK = 11  # SCLK
+SPIMISO = 9  # MISO
+SPIMOSI = 10  # MOSI
+SPICS = 8  # CS
+
+# Open GPIO handle
+h = lgpio.gpiochip_open(0)
+
+# Set SPI pin modes
+lgpio.gpio_claim_output(h, SPICLK)
+lgpio.gpio_claim_output(h, SPIMOSI)
+lgpio.gpio_claim_output(h, SPICS)
+lgpio.gpio_claim_input(h, SPIMISO)
+
+# Function to read MCP3008 from a specific channel
+def readadc(adcnum, clockpin, mosipin, misopin, cspin):
+    if adcnum > 7 or adcnum < 0:
+        return -1
+
+    lgpio.gpio_write(h, cspin, 1)
+    lgpio.gpio_write(h, clockpin, 0)
+    lgpio.gpio_write(h, cspin, 0)
+
+    commandout = adcnum
+    commandout |= 0x18  # Start bit + single-ended bit
+    commandout <<= 3  # Send 5-bit command
+    for i in range(5):
+        if commandout & 0x80:
+            lgpio.gpio_write(h, mosipin, 1)
+        else:
+            lgpio.gpio_write(h, mosipin, 0)
+        commandout <<= 1
+        lgpio.gpio_write(h, clockpin, 1)
+        lgpio.gpio_write(h, clockpin, 0)
+
+    adcout = 0
+    # Read one null bit and 10 ADC bits
+    for i in range(12):
+        lgpio.gpio_write(h, clockpin, 1)
+        lgpio.gpio_write(h, clockpin, 0)
+        adcout <<= 1
+        if lgpio.gpio_read(h, misopin):
+            adcout |= 0x1
+
+    lgpio.gpio_write(h, cspin, 1)
+
+    adcout >>= 1  # Drop the first null bit
+    return adcout
+
+try:
+    while True:
+        for channel in range(8):
+            value = readadc(channel, SPICLK, SPIMOSI, SPIMISO, SPICS)  # Read each channel's value
+            print(f"Value for channel {channel}: {value}")  # Output channel values
+        time.sleep(1)  # Wait 1 second before reading again
+
+except KeyboardInterrupt:
+    lgpio.gpiochip_close(h)  # Clean up all GPIO pin settings
+    print("Program has stopped.")

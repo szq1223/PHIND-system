@@ -1,0 +1,53 @@
+# fingerprint_sensor.py
+
+import time
+from pyfingerprint.pyfingerprint import PyFingerprint
+
+class FingerprintSensor:
+    def __init__(self, stop_event, fingerprint_active_event):
+        self.stop_event = stop_event
+        self.fingerprint_active_event = fingerprint_active_event
+        self.user_info = ""
+
+        # Initialize fingerprint sensor
+        try:
+            self.f = PyFingerprint('/dev/ttyUSB0', 57600, 0xFFFFFFFF, 0x00000000)
+            if not self.f.verifyPassword():
+                raise ValueError('The given fingerprint sensor password is wrong!')
+            print('Fingerprint sensor initialized successfully.')
+        except Exception as e:
+            print('The fingerprint sensor could not be initialized!')
+            print('Exception message: ' + str(e))
+            exit(1)
+
+    def run(self):
+        try:
+            while not self.stop_event.is_set():
+                if self.fingerprint_active_event.is_set():
+                    print('Waiting for finger...')
+                    while self.fingerprint_active_event.is_set() and not self.stop_event.is_set():
+                        if self.f.readImage():
+                            self.f.convertImage(0x01)
+                            result = self.f.searchTemplate()
+                            positionNumber = result[0]
+                            if positionNumber != -1:
+                                # Custom user information based on recognized fingerprints
+                                if positionNumber == 0:
+                                    self.user_info = "super handsome smart guy SONG ZHIQUAN"
+                                elif positionNumber == 1:
+                                    self.user_info = "coding genius MINSO"
+                                elif positionNumber == 2:
+                                    self.user_info = "SONG ZHIQUAN again hahahahahahahahaha"
+                                elif positionNumber == 3:
+                                    self.user_info = "Lord Park Seung-min"
+                                else:
+                                    self.user_info = "Unknown"
+                                
+                                print(f'Fingerprint recognized. User: {self.user_info}')
+                                self.stop_event.set()
+                                break
+                        time.sleep(0.5)
+                else:
+                    time.sleep(0.5)
+        except Exception as e:
+            print('Fingerprint detection failed.')
