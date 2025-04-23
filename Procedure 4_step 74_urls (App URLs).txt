@@ -1,7 +1,0 @@
-# analysis/urls.py
-from django.urls import path
-from .views import display_results
-
-urlpatterns = [
-    path('results/', display_results, name='display_results'),
-]
