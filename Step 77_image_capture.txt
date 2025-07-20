@@ -13,7 +13,7 @@ class ImageCapture:
 
     def capture_image(self):
         date_string = datetime.datetime.now().strftime('%Y%m%d%H%M%S')
-        filename = f"/home/park/images/{date_string}.jpg"
+        filename = f"/home/<your-username>/images/{date_string}.jpg"
         self.image_filenames.append(filename)
         result = subprocess.run(
             ["libcamera-still", "-o", filename, "--nopreview", "-t", "1", "--width", "640", "--height", "480"],

@@ -45,7 +45,7 @@ class S3Uploader:
 
         # Create JSON filename similar to the last captured image
         json_filename = os.path.basename(image_filenames[-1]).replace(".jpg", ".json")
-        json_filepath = os.path.join("/home/park/images", json_filename)
+        json_filepath = os.path.join("/home/<your-username>/images", json_filename)
 
         # Display the user name
         print(f"User: {user_info}")
