@@ -189,7 +189,7 @@ plt.legend()
 plt.show()
 
 # Load the best complete model for testing
-model = torch.load(os.path.join(model_save_dir, '3class.pth'))
+model = torch.load(os.path.join(model_save_dir, '3class.pth'), weights_only=False)
 model.eval()
 
 # Confusion Matrix and Classification Report
@@ -203,3 +203,4 @@ plt.xlabel('Predicted')
 plt.ylabel('True')
 plt.title('Confusion Matrix')
 plt.show()
+
