@@ -174,7 +174,7 @@ for epoch in range(num_epochs):
         break
 
 # Load the best model for testing
-model = torch.load(os.path.join(model_save_dir, '7class.pth'))
+model = torch.load(os.path.join(model_save_dir, '7class.pth'), weights_only=False)
 
 # Plot the graph of EPOCH and train, test accuracy
 plt.figure(figsize=(10, 5))
@@ -199,3 +199,4 @@ plt.xlabel('Predicted')
 plt.ylabel('True')
 plt.title('Confusion Matrix for BS1 to BS7 (Best Epoch)')
 plt.show()
+
